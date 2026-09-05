@@ -97,23 +97,69 @@ def extract_id3_via_exiftool(filepath: str) -> tuple[str | None, str | None]:
 def extract_wavsteg(filepath: str, output_path: str | None = None) -> tuple[str | None, str | None]:
     if not check_tool("wavsteg"):
         return None, "wavsteg is not installed (see tool_check.py --profile audio)"
-    command = ["wavsteg", str(Path(filepath).resolve())]
     if output_path:
         destination = Path(output_path).expanduser()
         if not destination.parent.exists():
             return None, f"wavsteg output directory '{destination.parent}' does not exist"
-        command.extend(["-o", str(destination)])
-    stdout, stderr, code = run_command(command)
-    if code != 0:
-        return None, stderr.strip() or stdout.strip() or f"wavsteg exited with status {code}"
-    if output_path and Path(output_path).is_file():
-        data = Path(output_path).read_bytes()
-        try:
-            rendered = data.decode("utf-8")
-        except UnicodeDecodeError:
-            rendered = f"hex:{data.hex()}"
-        return rendered, None
-    return stdout.strip(), None
+    # This wavsteg build ignores -audio and always reads ./enc_file.wav,
+    # writing ./results/dec_msg.txt, so stage the carrier in a temp dir.
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="wavsteg_") as tmpdir:
+            tmp = Path(tmpdir)
+            (tmp / "results").mkdir(exist_ok=True)
+            shutil.copy(str(Path(filepath).resolve()), str(tmp / "enc_file.wav"))
+            try:
+                result = subprocess.run(
+                    ["wavsteg", "-audio", "enc_file.wav"],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    check=False,
+                    cwd=str(tmp),
+                )
+            except subprocess.TimeoutExpired:
+                return None, "wavsteg timed out after 120s"
+            except OSError as exc:
+                return None, f"could not run wavsteg: {exc}"
+            decoded = tmp / "results" / "dec_msg.txt"
+            if result.returncode == 0 and decoded.is_file():
+                try:
+                    rendered = decoded.read_bytes().decode("utf-8")
+                except UnicodeDecodeError:
+                    rendered = f"hex:{decoded.read_bytes().hex()}"
+                if output_path:
+                    Path(output_path).expanduser().write_text(rendered, encoding="utf-8")
+                return rendered.strip() or "(empty wavsteg payload)", None
+            detail = (result.stderr or "").strip() or (result.stdout or "").strip()
+            return None, detail or f"wavsteg exited with status {result.returncode}"
+    except OSError as exc:
+        return None, f"wavsteg staging failed: {exc}"
+
+
+AUDIO_EXTENSIONS = (".wav", ".mp3")
+
+
+def normalize_extensions(extensions: Sequence[str] | None) -> set[str]:
+    if not extensions:
+        return set(AUDIO_EXTENSIONS)
+    return {
+        extension.lower() if extension.startswith(".") else f".{extension.lower()}"
+        for extension in extensions
+    }
+
+
+def list_audio_files(directory: str, extensions: Sequence[str] | None = None) -> list[str]:
+    path = Path(directory).expanduser()
+    if not path.is_dir():
+        raise AudioError(f"directory '{path}' was not found")
+    allowed = normalize_extensions(extensions)
+    return [
+        str(entry.resolve())
+        for entry in sorted(path.iterdir(), key=lambda item: item.name)
+        if entry.is_file() and entry.suffix.lower() in allowed
+    ]
 
 
 def _find_flags(text: str) -> list[str]:
@@ -242,6 +288,65 @@ def render_report(results: dict[str, object]) -> str:
     return "\n".join(lines)
 
 
+def render_folder_report(directory: str, analyses: list[dict[str, object]]) -> str:
+    lines = [
+        "Audio Forensics (folder)",
+        "=" * 60,
+        f"Directory: {directory}",
+        f"Files: {len(analyses)}",
+        "",
+    ]
+    all_flags: list[tuple[str, str]] = []
+    error_files = 0
+    for index, results in enumerate(analyses, 1):
+        name = Path(str(results["filepath"])).name
+        lines.append(f"[{index}/{len(analyses)}] {name}")
+        lines.append(f"  Type: {results['file_type'] or 'Unknown'}")
+        if results["spectrogram"]:
+            lines.append(f"  Spectrogram: {results['spectrogram']}")
+        flags = results["flags"]
+        assert isinstance(flags, list)
+        if flags:
+            lines.append("  Flags:")
+            lines.extend(f"    [!] {flag}" for flag in flags)
+            all_flags.extend((name, flag) for flag in flags)
+        else:
+            lines.append("  Flags: none found")
+        wavsteg_text = results["wavsteg_result"]
+        if wavsteg_text is not None:
+            text = str(wavsteg_text)
+            for flag in _find_flags(text):
+                lines.append(f"  wavsteg flag: [!] {flag}")
+                all_flags.append((name, flag))
+            preview = text[:200].replace("\n", "\\n")
+            suffix = f" ... ({len(text)} chars total)" if len(text) > 200 else ""
+            lines.append(f"  wavsteg: {preview}{suffix}")
+        if results["id3_tags"] is not None:
+            tags = results["id3_tags"]
+            assert isinstance(tags, dict)
+            lines.append(f"  ID3 tags: {len(tags)} found" if tags else "  ID3 tags: none")
+        warnings = results["warnings"]
+        assert isinstance(warnings, list)
+        for warning in warnings[:3]:
+            lines.append(f"  Warning: {warning}")
+        errors = results["requested_errors"]
+        assert isinstance(errors, list)
+        for error in errors:
+            lines.append(f"  Error: {error}")
+        if errors:
+            error_files += 1
+        lines.append("")
+    lines.append("Summary:")
+    lines.append(f"  Files with flags: {len({name for name, _ in all_flags})}/{len(analyses)}")
+    if all_flags:
+        for name, flag in all_flags:
+            lines.append(f"  [!] {name}: {flag}")
+    else:
+        lines.append("  No flags found in any file")
+    lines.append(f"  Files with operation errors: {error_files}/{len(analyses)}")
+    return "\n".join(lines)
+
+
 def write_report(report: str, output: str) -> None:
     if output == "console":
         print(report)
@@ -255,7 +360,10 @@ def write_report(report: str, output: str) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Audio metadata, strings, spectrogram, and LSB analysis")
-    parser.add_argument("file", help="WAV or MP3 file")
+    parser.add_argument("file", nargs="?", help="WAV or MP3 file")
+    parser.add_argument("--folder", help="Process every WAV/MP3 file in a directory (sorted, non-recursive)")
+    parser.add_argument("--ext", nargs="*", help="Folder-mode extensions (default: wav mp3)")
+    parser.add_argument("--spectrogram-dir", help="Folder-mode spectrogram output directory")
     parser.add_argument("-s", "--spectrogram", help="Explicit spectrogram image path (WAV)")
     parser.add_argument("-w", "--wavsteg", action="store_true", help="Run wavsteg explicitly")
     parser.add_argument("--wavsteg-output", help="Optional wavsteg payload destination")
@@ -268,6 +376,45 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if bool(args.file) == bool(args.folder):
+            raise AudioError("provide exactly one of FILE or --folder DIR")
+        if args.folder and (args.spectrogram or args.wavsteg_output):
+            raise AudioError("--spectrogram and --wavsteg-output are single-file options; use --spectrogram-dir in folder mode")
+        if args.folder:
+            folder = str(Path(args.folder).expanduser())
+            files = list_audio_files(folder, args.ext)
+            if not files:
+                raise AudioError(f"no audio files found in '{folder}'")
+            spec_dir: Path | None = None
+            if args.spectrogram_dir or args.all:
+                spec_dir = Path(args.spectrogram_dir).expanduser() if args.spectrogram_dir else None
+                if spec_dir is not None:
+                    spec_dir.mkdir(parents=True, exist_ok=True)
+            analyses: list[dict[str, object]] = []
+            for filepath in files:
+                path = Path(filepath)
+                spectrogram: str | None = None
+                run_wavsteg = args.wavsteg or args.all
+                if args.all and path.suffix.lower() == ".wav":
+                    spectrogram = str(
+                        (spec_dir / f"{path.stem}_spectrogram.png")
+                        if spec_dir is not None
+                        else path.with_name(f"{path.stem}_spectrogram.png")
+                    )
+                    run_wavsteg = True
+                analyses.append(
+                    analyze_audio(
+                        str(path),
+                        spectrogram=spectrogram,
+                        run_wavsteg=run_wavsteg,
+                        id3_only=args.id3,
+                        wavsteg_output=None,
+                    )
+                )
+            write_report(render_folder_report(folder, analyses), args.output)
+            return 2 if any(a["requested_errors"] for a in analyses) else 0
+
+        assert args.file is not None
         path = Path(args.file).expanduser()
         if not path.is_file():
             raise AudioError(f"audio file '{path}' was not found")

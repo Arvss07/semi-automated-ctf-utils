@@ -208,6 +208,7 @@ python3 scripts/audio_forensics.py audio.wav
 python3 scripts/audio_forensics.py audio.wav --spectrogram spectrogram.png
 python3 scripts/audio_forensics.py audio.wav --wavsteg --wavsteg-output payload.bin
 python3 scripts/audio_forensics.py audio.mp3 --id3
+python3 scripts/audio_forensics.py --folder wavs/ --all --spectrogram-dir specs/
 ```
 
 Default analysis reads type/strings and does not create artifacts. Spectrogram generation currently supports WAV input; optional operations run only when requested (or via `--all`).
