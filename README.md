@@ -176,9 +176,10 @@ python3 scripts/dh_solver.py --g 2 --p 23 --a 6 --B 19 --enc-hex '...' --output 
 python3 scripts/stego_runner.py image.jpg --passphrase secret --extract-to payload.bin
 python3 scripts/stego_runner.py image.jpg --wordlist words.txt --extract-to payload.bin
 python3 scripts/stego_runner.py image.png --tool zsteg --output zsteg-report.txt
+python3 scripts/stego_runner.py image.jpg --extract-to payload.bin --force -v
 ```
 
-Existing payloads are not overwritten unless `--force` is supplied. `--output` is the text report; `--extract-to` is the payload.
+Existing payloads are not overwritten unless `--force` is supplied. `--output` is the text report; `--extract-to` is the payload. Each extracted payload reports size, `file` type, raw flag search (`flag/CTF/picoCTF/H4G/...`), and snow-like whitespace-stego decoding (`space=0/tab=1` variants with escaped `cat -A` preview); `-v` lists every decode variant.
 
 ### Archives
 
