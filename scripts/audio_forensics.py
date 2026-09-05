@@ -12,7 +12,7 @@ import sys
 from typing import Sequence
 
 
-FLAG_PATTERNS = [r"flag\{[^}]+\}", r"CTF\{[^}]+\}", r"picoCTF\{[^}]+\}"]
+FLAG_PATTERNS = [r"flag\{[^}]+\}", r"CTF\{[^}]+\}", r"picoCTF\{[^}]+\}", r"H4G\{[^}]+\}"]
 
 
 class AudioError(ValueError):

@@ -1,6 +1,6 @@
 # CTF Toolkit
 
-A set of 12 focused Python command-line tools that reduce common CTF crypto and forensics workflows to short, repeatable commands. The target environment is Kali Linux (or another Linux distribution with equivalent packages) and Python 3.10+.
+A set of 13 focused Python command-line tools that reduce common CTF crypto and forensics workflows to short, repeatable commands. The target environment is Kali Linux (or another Linux distribution with equivalent packages) and Python 3.10+.
 
 ## Quick start
 
@@ -74,12 +74,13 @@ The default dictionary is `/usr/share/wordlists/rockyou.txt` when present. Detec
 | `cipher_solver.py`    | Caesar, Vigenere, and substitution-frequency analysis                                     | No                                        |
 | `xor_toolkit.py`      | Single/repeating XOR, key-length analysis, and phase-correct crib dragging                | No                                        |
 | `rsa_solver.py`       | Exact-integer low-e, Fermat, Wiener, common-modulus, and known-key operations             | No                                        |
+| `dh_solver.py`        | Diffie-Hellman shared-secret recovery (`pow(A,b,p)`/`pow(B,a,p)`) and XOR decryption      | No                                        |
 | `hash_wrapper.py`     | hashcat/John command construction, execution, sessions, and result retrieval              | Cracker pot/session files only            |
 | `archive_cracker.py`  | zip/rar/7z hash extraction, password cracking, or explicit unpacking                      | Crack: temporary files only; extract: yes |
 | `pcap_forensics.py`   | tshark endpoints, conversations, credentials, streams, flags, and explicit HTTP export    | No; export requires `-x`                  |
 | `audio_forensics.py`  | Metadata/strings plus explicit WAV spectrogram and wavsteg operations                     | No; optional operations are explicit      |
 
-All 12 primary tools support `--output console` (default) or `--output PATH` for their text result/report. Extraction artifacts use separate options such as `--extract-to`, `--output-dir`, or `--wavsteg-output`.
+All 13 primary tools support `--output console` (default) or `--output PATH` for their text result/report. Extraction artifacts use separate options such as `--extract-to`, `--output-dir`, or `--wavsteg-output`.
 
 ## Recommended workflow
 
@@ -87,7 +88,7 @@ All 12 primary tools support `--output console` (default) or `--output PATH` for
 2. Use `archive_cracker.py` for an archive or `batch_diff.py` for a collection.
 3. Run `triage.py` on an unknown individual file.
 4. Copy the runnable command from triage's **Suggested next steps** section.
-5. Move from representation to cryptanalysis: decoder → cipher/XOR/RSA/hash tool.
+5. Move from representation to cryptanalysis: decoder → cipher/XOR/RSA/DH/hash tool.
 
 `triage.py` is observational by default. It runs `binwalk` without extraction; only `--extract` enables `binwalk -e`.
 
@@ -155,6 +156,19 @@ python3 scripts/rsa_solver.py -n MODULUS -e EXPONENT -c CIPHERTEXT --attack ferm
 python3 scripts/rsa_solver.py -n MODULUS -e EXPONENT --attack wiener
 python3 scripts/rsa_solver.py -n MODULUS -1 C1 -c C2 --e1 E1 --e2 E2 --attack commonmod
 ```
+
+### DH
+
+Params files use one `KEY = VALUE` line each (`g`, `p`, `A`/`B`/`a`/`b`, `enc` hex), as produced by `encryption.py`-style challenges. Every numeric parameter also accepts a direct decimal/`0x` value or a file containing one:
+
+```bash
+python3 scripts/dh_solver.py message.txt
+python3 scripts/dh_solver.py --params message.txt --top 5
+python3 scripts/dh_solver.py --g 2 --p p.txt --A A.txt --b b.txt --enc-hex ffe6ece0...
+python3 scripts/dh_solver.py --g 2 --p 23 --a 6 --B 19 --enc-hex '...' --output dh-report.txt
+```
+
+`triage.py` routes `g/p/A/B/a/b + enc` params files to `dh_solver.py` automatically. The solver tries `shared%256` single-byte plus `BE/LE` and `SHA256/SHA1/MD5/SHA512`-derived repeating-XOR keys, ranks by English score with a flag-pattern bonus, and warns on weak params (even/composite/small `p`, trivial `A`/`B`, tiny-order `g`, degenerate `shared`).
 
 ### Steganography
 
@@ -227,6 +241,7 @@ sudo apt install python3-numpy python3-scipy python3-matplotlib python3-mutagen
 - An installed hashcat executable still needs a working OpenCL/HIP/CUDA backend. Auto mode falls back to John on initialization failure; forced `--hashcat` correctly returns the backend error.
 - Caesar/Vigenere/XOR solvers use statistical English scoring. Short, non-English, compressed, or binary plaintext can rank poorly and needs known keys/cribs or manual review.
 - RSA support targets textbook CTF weaknesses. It does not attack secure padding, side channels, arbitrary lattice problems, or general large-number factorization. Fermat is bounded by `--max-iterations`.
+- DH support targets supplied-private challenges (`pow(A,b,p)` / `pow(B,a,p)`) plus weak-param recovery. It does not solve large-prime discrete logs, full `p-1` factorization/Pohlig-Hellman, small-subgroup confinement beyond a bounded probe, or AES/HKDF-derived session keys (use Python `Crypto`/SageMath/openssl for those). Bounded DLP is capped by `--max-dlp-steps`; prime testing is probabilistic.
 - tshark field availability varies by version and dissector. Unsupported credential fields are reported as warnings. Stream search is capped for runtime control.
 - WAV spectrogram/wavsteg handling depends on local Python/tool versions; MP3 spectrogram conversion is not currently implemented.
 - Archive extraction is delegated to installed extractors. Treat hostile archives as untrusted and extract inside a disposable directory/container; expanded-size quotas and universal cross-format traversal inspection are future work.

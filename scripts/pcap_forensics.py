@@ -19,6 +19,7 @@ FLAG_PATTERNS = [
     r"CTF\{[^}]+\}",
     r"CTF\[[^\]]+\]",
     r"picoCTF\{[^}]+\}",
+    r"H4G\{[^}]+\}",
 ]
 
 

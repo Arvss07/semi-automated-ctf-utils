@@ -28,6 +28,7 @@ FLAG_PATTERNS = [
     r"CSAW\{[^}]+\}",
     r"HTB\{[^}]+\}",
     r"picoCTF\{[^}]+\}",
+    r"H4G\{[^}]+\}",
 ]
 
 TOOL_INSTALL = {
@@ -175,6 +176,23 @@ def _tool_command(
     return shlex.join(argv)
 
 
+DH_PARAM_RE = re.compile(r"^\s*(g|p|A|B|a|b|enc)\s*=\s*(\S.*?)\s*$")
+
+
+def looks_like_dh(text: str | None) -> bool:
+    """Return True when text has DH params shape (g/p/A/B/a/b + enc)."""
+    if not text:
+        return False
+    found: set[str] = set()
+    for line in text.splitlines():
+        match = DH_PARAM_RE.match(line)
+        if match:
+            found.add(match.group(1))
+    if "p" not in found or "enc" not in found:
+        return False
+    return len(found & {"g", "A", "B", "a", "b"}) >= 1 and len(found) >= 3
+
+
 def build_suggestions(
     filepath: Path,
     file_type: str | None,
@@ -206,6 +224,8 @@ def build_suggestions(
         return [_tool_command("audio_forensics.py", filepath)]
     if "pdf" in lowered or suffix == ".pdf":
         return ["Inspect PDF metadata/objects, then run strings or a PDF extraction tool"]
+    if looks_like_dh(text_sample):
+        return [_tool_command("dh_solver.py", filepath)]
     if text_sample is not None or "text" in lowered or "ascii" in lowered:
         first_line = next((line.strip() for line in (text_sample or "").splitlines() if line.strip()), "")
         if first_line and is_encoding_like(first_line):
