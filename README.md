@@ -1,6 +1,6 @@
 # CTF Toolkit
 
-A set of 15 focused Python command-line tools that reduce common CTF crypto and forensics workflows to short, repeatable commands. All tools live directly in this repository root. The target environment is Kali Linux (or another Linux distribution with equivalent packages) and Python 3.10+.
+A set of 17 focused Python command-line tools that reduce common CTF crypto and forensics workflows to short, repeatable commands. All tools live directly in this repository root. The target environment is Kali Linux (or another Linux distribution with equivalent packages) and Python 3.10+.
 
 ## Quick start
 
@@ -83,8 +83,10 @@ The default dictionary is `/usr/share/wordlists/rockyou.txt` when present. Detec
 | `audio_forensics.py`  | Metadata/strings plus explicit WAV spectrogram and wavsteg operations                     | No; optional operations are explicit      |
 | `disk_forensics.py`   | Read-only FAT/NTFS/ext image metadata, allocated/deleted listings, previews, recovery     | No; recovery requires `--extract-dir`     |
 | `sqlite_forensics.py` | Read-only integrity, schema, row, and printable free-page string reporting                | No                                        |
+| `pg_forensics.py`     | Read-only offline PostgreSQL plain-SQL dump schema, rows, and flag reporting              | No                                        |
+| `mysql_forensics.py`  | Read-only offline MySQL/MariaDB dump schema, rows, and flag reporting                     | No                                        |
 
-All 15 primary tools support `--output console` (default) or `--output PATH` for their text result/report. Extraction artifacts use separate options such as `--extract-to`, `--output-dir`, or `--wavsteg-output`.
+All 17 primary tools support `--output console` (default) or `--output PATH` for their text result/report. Extraction artifacts use separate options such as `--extract-to`, `--output-dir`, or `--wavsteg-output`.
 
 ## Recommended workflow
 
@@ -256,18 +258,20 @@ python3 <script>.py --help
 
 This toolkit is intended for authorized CTF and educational use.
 
-## Disk images and SQLite
+## Disk images and databases
 
-Both analyzers are read-only by default and are selected automatically by `triage.py`:
+Disk, SQLite, and SQL-dump analyzers are read-only by default and are selected automatically by `triage.py`:
 
 ```bash
 python3 disk_forensics.py demo_files/actual_challs/evidence.img --preview
 python3 disk_forensics.py image.dd --extract-dir recovered/  # explicit recovery
 python3 sqlite_forensics.py demo_files/actual_challs/case_notes.db --strings
+python3 pg_forensics.py dump.sql --strings
+python3 mysql_forensics.py dump.sql --strings
 ```
 
-`disk_forensics.py` uses Sleuth Kit (`fsstat`, `fls`, and `icat`) without mounting the image, lists allocated and deleted entries, and sanitizes recovered filenames. `sqlite_forensics.py` opens databases with SQLite URI `mode=ro` plus `PRAGMA query_only`, checks integrity, quotes table identifiers, limits displayed rows, and can expose raw printable remnants for manual deleted-record triage.
+`disk_forensics.py` uses Sleuth Kit (`fsstat`, `fls`, and `icat`) without mounting the image, lists allocated and deleted entries, and sanitizes recovered filenames. `sqlite_forensics.py` opens databases with SQLite URI `mode=ro` plus `PRAGMA query_only`, checks integrity, quotes table identifiers, limits displayed rows, and can expose raw printable remnants for manual deleted-record triage. `pg_forensics.py` and `mysql_forensics.py` parse offline plain-SQL text dumps only (`CREATE TABLE` + `INSERT`/`REPLACE`, plus Postgres `COPY ... FROM stdin`); they never connect to a live server, never execute SQL, refuse `PGDMP` custom-format/binary input with a `pg_restore` conversion hint, cap input at 20 MB, and mirror the SQLite report shape (`--row-limit`, `--strings`, `--output`).
 
 ## Coverage boundaries
 
-The toolkit now covers the audit's highest-value routing and local-analysis gaps: RSA/XOR routing, multi-line encoding detection, FAT/disk images, SQLite, actionable PDF/Office/ELF/memory commands, Base64URL/Base85/Morse/ROT47/Atbash, modern self-identifying hash formats, recursive batch discovery, and native zero-width/appended-payload stego checks. Advanced specialist techniques remain intentionally delegated rather than advertised as solved: Coppersmith/padding-oracle RSA, full Pohlig-Hellman, Hill/Playfair and statistical substitution search, native image LSB/palette analysis, memory-profile automation, Office macro deobfuscation, fuzzy/perceptual hashes, non-HTTP protocol carving, DTMF/SSTV, and password-protected archive bomb analysis. Use the suggested specialist tools and explicit dependency profiles for those cases.
+The toolkit now covers the audit's highest-value routing and local-analysis gaps: RSA/XOR routing, multi-line encoding detection, FAT/disk images, SQLite, offline PostgreSQL/MySQL plain-SQL dumps, actionable PDF/Office/ELF/memory commands, Base64URL/Base85/Morse/ROT47/Atbash, modern self-identifying hash formats, recursive batch discovery, and native zero-width/appended-payload stego checks. Web work is intentionally manual (see `docs/`): Burp Suite is allowed, so no `web_recon.py` automation is shipped. Advanced specialist techniques remain intentionally delegated rather than advertised as solved: live database connections, custom-format/tar/directory dump execution, WAL/binlog/ibd carving, Coppersmith/padding-oracle RSA, full Pohlig-Hellman, Hill/Playfair and statistical substitution search, native image LSB/palette analysis, memory-profile automation, Office macro deobfuscation, fuzzy/perceptual hashes, non-HTTP protocol carving, DTMF/SSTV, and password-protected archive bomb analysis. Use the suggested specialist tools and explicit dependency profiles for those cases.

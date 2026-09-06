@@ -219,6 +219,32 @@ def looks_like_dh(text: str | None) -> bool:
     return len(found & {"g", "A", "B", "a", "b"}) >= 1 and len(found) >= 3
 
 
+def looks_like_pg_dump(text: str | None) -> bool:
+    """Return True when text has PostgreSQL plain-dump markers."""
+    if not text:
+        return False
+    lowered = text.lower()
+    return (
+        "postgresql database dump" in lowered
+        or "pg_catalog" in lowered
+        or bool(re.search(r"(?m)^copy\s+\S+.*from\s+stdin", text, re.IGNORECASE))
+    )
+
+
+def looks_like_mysql_dump(text: str | None) -> bool:
+    """Return True when text has MySQL/MariaDB dump markers."""
+    if not text:
+        return False
+    lowered = text.lower()
+    return (
+        "mysql dump" in lowered
+        or "mariadb dump" in lowered
+        or "mysqldump" in lowered
+        or "lock tables" in lowered
+        or "engine=innodb" in lowered
+    )
+
+
 def build_suggestions(
     filepath: Path,
     file_type: str | None,
@@ -243,6 +269,14 @@ def build_suggestions(
 
     if "sqlite" in lowered or suffix in {".db", ".sqlite", ".sqlite3"}:
         return [_tool_command("sqlite_forensics.py", filepath, "--strings")]
+    if looks_like_pg_dump(text_sample) or suffix in {".psql", ".pgsql"}:
+        return [_tool_command("pg_forensics.py", filepath, "--strings")]
+    if looks_like_mysql_dump(text_sample) or suffix in {".sql", ".dump", ".mysql"}:
+        # Prefer the matching flavor; plain .sql without markers defaults to MySQL parser,
+        # which also handles generic CREATE TABLE/INSERT plain SQL.
+        if looks_like_pg_dump(text_sample):
+            return [_tool_command("pg_forensics.py", filepath, "--strings")]
+        return [_tool_command("mysql_forensics.py", filepath, "--strings")]
     if any(marker in lowered for marker in ("dos/mbr boot sector", "filesystem data", "fat12", "fat16", "fat32", "ntfs", "ext2", "ext3", "ext4")) or suffix in {".img", ".dd", ".raw", ".e01"}:
         return [_tool_command("disk_forensics.py", filepath, "--preview")]
     if "pcap" in lowered or "capture file" in lowered or suffix in {".pcap", ".pcapng"}:
