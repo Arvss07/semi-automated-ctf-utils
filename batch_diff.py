@@ -39,14 +39,15 @@ def _normalize_extensions(extensions: Sequence[str] | None) -> set[str] | None:
     return {extension.lower() if extension.startswith(".") else f".{extension.lower()}" for extension in extensions}
 
 
-def list_files(directory: str, extensions: Sequence[str] | None = None) -> list[str]:
+def list_files(directory: str, extensions: Sequence[str] | None = None, recursive: bool = False) -> list[str]:
     path = Path(directory).expanduser()
     if not path.is_dir():
         raise BatchError(f"directory '{path}' was not found")
     allowed = _normalize_extensions(extensions)
+    entries = path.rglob("*") if recursive else path.iterdir()
     return [
         str(entry.resolve())
-        for entry in sorted(path.iterdir(), key=lambda item: item.name)
+        for entry in sorted(entries, key=lambda item: str(item.relative_to(path)))
         if entry.is_file() and (allowed is None or entry.suffix.lower() in allowed)
     ]
 
@@ -196,7 +197,7 @@ def resolve_files(args: argparse.Namespace) -> list[str]:
 
     allowed = _normalize_extensions(args.ext)
     if len(inputs) == 1 and Path(inputs[0]).expanduser().is_dir():
-        files = list_files(inputs[0], args.ext)
+        files = list_files(inputs[0], args.ext, args.recursive)
     else:
         files = []
         for value in inputs:
@@ -226,6 +227,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("inputs", nargs="*", help="One directory or two or more files")
     parser.add_argument("-f", "--file", nargs="+", help="Additional explicit files (compatibility option)")
     parser.add_argument("-e", "--ext", nargs="+", help="Extensions to include")
+    parser.add_argument("-r", "--recursive", action="store_true", help="Recurse when the sole input is a directory")
     parser.add_argument("-m", "--method", choices=["hash", "size", "both"], default="both")
     parser.add_argument("-o", "--output", default="console", help="Report output path")
     return parser

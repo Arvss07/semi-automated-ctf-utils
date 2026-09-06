@@ -13,7 +13,17 @@ from typing import Callable, Sequence
 import urllib.parse
 
 
-DECODING_ORDER = ("binary", "hex", "url", "base32", "base64")
+DECODING_ORDER = ("binary", "hex", "url", "base32", "base64url", "base64", "morse")
+
+MORSE = {
+    ".-": "A", "-...": "B", "-.-.": "C", "-..": "D", ".": "E", "..-.": "F",
+    "--.": "G", "....": "H", "..": "I", ".---": "J", "-.-": "K", ".-..": "L",
+    "--": "M", "-.": "N", "---": "O", ".--.": "P", "--.-": "Q", ".-.": "R",
+    "...": "S", "-": "T", "..-": "U", "...-": "V", ".--": "W", "-..-": "X",
+    "-.--": "Y", "--..": "Z", "-----": "0", ".----": "1", "..---": "2",
+    "...--": "3", "....-": "4", ".....": "5", "-....": "6", "--...": "7",
+    "---..": "8", "----.": "9",
+}
 
 
 class DecodeError(ValueError):
@@ -110,12 +120,87 @@ def decode_url(data: bytes | str) -> bytes | None:
     return decoded if decoded != original else None
 
 
+def decode_base64url(data: bytes | str) -> bytes | None:
+    text = _to_ascii(data)
+    if text is None:
+        return None
+    compact = _without_whitespace(text)
+    if not compact or not re.fullmatch(r"[A-Za-z0-9_-]*={0,2}", compact) or len(compact) % 4 == 1:
+        return None
+    try:
+        return base64.b64decode(compact + "=" * ((-len(compact)) % 4), altchars=b"-_", validate=True)
+    except (binascii.Error, ValueError):
+        return None
+
+
+def decode_base85(data: bytes | str) -> bytes | None:
+    text = _to_ascii(data)
+    if text is None or not text.strip():
+        return None
+    try:
+        return base64.b85decode(_without_whitespace(text))
+    except (ValueError, binascii.Error):
+        return None
+
+
+def decode_ascii85(data: bytes | str) -> bytes | None:
+    text = _to_ascii(data)
+    if text is None or not text.strip():
+        return None
+    try:
+        return base64.a85decode(_without_whitespace(text), adobe=text.strip().startswith("<~"))
+    except (ValueError, binascii.Error):
+        return None
+
+
+def decode_rot47(data: bytes | str) -> bytes | None:
+    text = _to_ascii(data)
+    if text is None:
+        return None
+    return "".join(chr(33 + ((ord(char) - 33 + 47) % 94)) if 33 <= ord(char) <= 126 else char for char in text).encode()
+
+
+def decode_atbash(data: bytes | str) -> bytes | None:
+    text = _to_ascii(data)
+    if text is None:
+        return None
+    converted = []
+    for char in text:
+        if "A" <= char <= "Z":
+            converted.append(chr(ord("Z") - (ord(char) - ord("A"))))
+        elif "a" <= char <= "z":
+            converted.append(chr(ord("z") - (ord(char) - ord("a"))))
+        else:
+            converted.append(char)
+    return "".join(converted).encode()
+
+
+def decode_morse(data: bytes | str) -> bytes | None:
+    text = _to_ascii(data)
+    if text is None or not re.fullmatch(r"[.\-/\s]+", text.strip()):
+        return None
+    words = re.split(r"\s*/\s*|\s{2,}", text.strip())
+    decoded_words: list[str] = []
+    for word in words:
+        letters = word.split()
+        if not letters or any(letter not in MORSE for letter in letters):
+            return None
+        decoded_words.append("".join(MORSE[letter] for letter in letters))
+    return " ".join(decoded_words).encode()
+
+
 DECODERS: dict[str, Callable[[bytes | str], bytes | None]] = {
     "base64": decode_base64,
+    "base64url": decode_base64url,
     "base32": decode_base32,
+    "base85": decode_base85,
+    "ascii85": decode_ascii85,
     "hex": decode_hex,
     "binary": decode_binary,
     "url": decode_url,
+    "rot47": decode_rot47,
+    "atbash": decode_atbash,
+    "morse": decode_morse,
 }
 
 
@@ -133,12 +218,21 @@ def _looks_like(text: str, encoding: str) -> bool:
         return bool(re.search(r"%[0-9A-Fa-f]{2}", text))
     if encoding == "base32":
         return len(compact) >= 8 and bool(re.fullmatch(r"[A-Z2-7]*={0,6}", compact))
+    if encoding == "base64url":
+        return (
+            len(compact) >= 4
+            and ("-" in compact or "_" in compact)
+            and len(compact) % 4 != 1
+            and bool(re.fullmatch(r"[A-Za-z0-9_-]*={0,2}", compact))
+        )
     if encoding == "base64":
         return (
             len(compact) >= 4
             and len(compact) % 4 != 1
             and bool(re.fullmatch(r"[A-Za-z0-9+/]*={0,2}", compact))
         )
+    if encoding == "morse":
+        return len(text.strip()) >= 3 and bool(re.fullmatch(r"[.\-/\s]+", text.strip()))
     return False
 
 
@@ -275,7 +369,7 @@ def write_output(result: str, output: str, sources: set[str] | None = None, forc
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Decode Base64, Base32, hex, binary, and URL-encoded data",
+        description="Decode common CTF encodings and text transforms",
         allow_abbrev=False,
     )
     parser.add_argument("input", nargs="?", help="Literal text or existing file")
@@ -284,7 +378,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-d",
         "--decode",
-        choices=["base64", "base32", "hex", "binary", "url", "auto"],
+        choices=["base64", "base64url", "base32", "base85", "ascii85", "hex", "binary", "url", "rot47", "atbash", "morse", "auto"],
         default="auto",
         help="Encoding to decode (default: auto)",
     )

@@ -12,12 +12,8 @@ import subprocess
 import sys
 from typing import Sequence
 
-try:
-    from encoding_decoder import is_encoding_like
-    from hash_wrapper import detect_hash_type
-except ImportError:  # Support import as scripts.triage from the repository root.
-    from scripts.encoding_decoder import is_encoding_like
-    from scripts.hash_wrapper import detect_hash_type
+from encoding_decoder import is_encoding_like
+from hash_wrapper import detect_hash_type
 
 
 FLAG_PATTERNS = [
@@ -177,6 +173,36 @@ def _tool_command(
 
 
 DH_PARAM_RE = re.compile(r"^\s*(g|p|A|B|a|b|enc)\s*=\s*(\S.*?)\s*$")
+RSA_PARAM_RE = re.compile(r"^\s*(n|e|c|p|q|d)\s*[:=]\s*(0x[0-9a-fA-F]+|\d+)\s*$")
+
+
+def parse_rsa_params(text: str | None) -> dict[str, str]:
+    """Parse a conventional n/e/c/p/q/d RSA challenge parameter file."""
+    params: dict[str, str] = {}
+    for line in (text or "").splitlines():
+        match = RSA_PARAM_RE.match(line)
+        if match:
+            params[match.group(1)] = match.group(2)
+    return params
+
+
+def encoding_like_sample(text: str | None) -> bool:
+    """Check complete text and bounded non-empty lines, not only line one."""
+    if not text:
+        return False
+    stripped = text.strip()
+    if stripped and is_encoding_like(stripped):
+        return True
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return any(is_encoding_like(line) for line in lines[:100])
+
+
+def rsa_command(params: dict[str, str]) -> str:
+    argv = ["python3", str(Path(__file__).resolve().with_name("rsa_solver.py"))]
+    for name in ("n", "e", "c", "p", "q", "d"):
+        if name in params:
+            argv.extend([f"--{ {'n': 'modulus', 'e': 'exponent', 'c': 'ciphertext'}.get(name, name) }", params[name]])
+    return shlex.join(argv)
 
 
 def looks_like_dh(text: str | None) -> bool:
@@ -213,22 +239,36 @@ def build_suggestions(
 
     lowered = (file_type or "").lower()
     suffix = filepath.suffix.lower()
+    quoted = shlex.quote(str(filepath))
 
+    if "sqlite" in lowered or suffix in {".db", ".sqlite", ".sqlite3"}:
+        return [_tool_command("sqlite_forensics.py", filepath, "--strings")]
+    if any(marker in lowered for marker in ("dos/mbr boot sector", "filesystem data", "fat12", "fat16", "fat32", "ntfs", "ext2", "ext3", "ext4")) or suffix in {".img", ".dd", ".raw", ".e01"}:
+        return [_tool_command("disk_forensics.py", filepath, "--preview")]
     if "pcap" in lowered or "capture file" in lowered or suffix in {".pcap", ".pcapng"}:
         return [_tool_command("pcap_forensics.py", filepath)]
     if "jpeg" in lowered or "png" in lowered or "bitmap" in lowered or suffix in {".jpg", ".jpeg", ".png", ".bmp"}:
-        return [_tool_command("stego_runner.py", filepath)]
+        return [_tool_command("stego_runner.py", filepath, "--tool", "all")]
     if any(marker in lowered for marker in ("zip", "rar archive", "7-zip")) or suffix in {".zip", ".rar", ".7z"}:
         return [_tool_command("archive_cracker.py", filepath)]
     if any(marker in lowered for marker in ("wav", "wave audio", "mp3", "mpeg adts")) or suffix in {".wav", ".mp3"}:
         return [_tool_command("audio_forensics.py", filepath)]
     if "pdf" in lowered or suffix == ".pdf":
-        return ["Inspect PDF metadata/objects, then run strings or a PDF extraction tool"]
+        return [f"pdfinfo -- {quoted}", f"pdftotext -- {quoted} -", f"pdfimages -list -- {quoted}"]
+    if any(marker in lowered for marker in ("microsoft word", "microsoft excel", "microsoft powerpoint", "composite document file")) or suffix in {".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt"}:
+        return [f"exiftool -- {quoted}", f"7z l -- {quoted}", f"olevba {quoted}"]
+    if "elf" in lowered:
+        return [f"checksec --file={quoted}", f"readelf -a -- {quoted}", f"objdump -d -- {quoted}"]
+    if any(marker in lowered for marker in ("hibernation", "memory dump", "minidump")) or suffix in {".vmem", ".dmp", ".mem"}:
+        return [f"vol.py -f {quoted} windows.info", f"strings -a -- {quoted} | less"]
+
+    rsa_params = parse_rsa_params(text_sample)
+    if "n" in rsa_params and ("c" in rsa_params or {"p", "q"} <= rsa_params.keys()):
+        return [rsa_command(rsa_params)]
     if looks_like_dh(text_sample):
         return [_tool_command("dh_solver.py", filepath)]
     if text_sample is not None or "text" in lowered or "ascii" in lowered:
-        first_line = next((line.strip() for line in (text_sample or "").splitlines() if line.strip()), "")
-        if first_line and is_encoding_like(first_line):
+        if encoding_like_sample(text_sample):
             return [
                 _tool_command(
                     "encoding_decoder.py",
@@ -237,7 +277,17 @@ def build_suggestions(
                     input_flag="--file",
                 )
             ]
-        return [_tool_command("cipher_solver.py", filepath)]
+        text_lower = (text_sample or "").lower()
+        if "xor" in text_lower or suffix in {".xor", ".hex"}:
+            return [_tool_command("xor_toolkit.py", filepath, "--mode", "detect", input_flag="--file")]
+        if re.search(r"https?://", text_sample or "") or suffix == ".url":
+            return [f"curl -sSIL --max-time 15 -- {shlex.quote((text_sample or '').strip())}"]
+        return [
+            _tool_command("cipher_solver.py", filepath),
+            _tool_command("xor_toolkit.py", filepath, "--mode", "detect", input_flag="--file"),
+        ]
+    if "data" in lowered or suffix in {".bin", ".dat"}:
+        return [_tool_command("xor_toolkit.py", filepath, "--mode", "detect", input_flag="--file")]
     return ["No specialized route identified; inspect the verbose report manually"]
 
 

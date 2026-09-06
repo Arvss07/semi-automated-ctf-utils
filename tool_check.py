@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Profile-aware dependency checker for the CTF utility scripts."""
+"""Profile-aware dependency checker for the CTF utility toolkit."""
 
 from __future__ import annotations
 
@@ -35,9 +35,13 @@ REQUIREMENTS: dict[str, dict[str, object]] = {
     "scipy": {"kind": "python", "module": "scipy", "install": "sudo apt install python3-scipy", "profiles": {"audio"}},
     "matplotlib": {"kind": "python", "module": "matplotlib", "install": "sudo apt install python3-matplotlib", "profiles": {"audio"}},
     "mutagen": {"kind": "python", "module": "mutagen", "install": "sudo apt install python3-mutagen", "profiles": {"audio"}},
+    "fls": {"kind": "executable", "install": "sudo apt install sleuthkit", "profiles": {"disk"}},
+    "fsstat": {"kind": "executable", "install": "sudo apt install sleuthkit", "profiles": {"disk"}},
+    "icat": {"kind": "executable", "install": "sudo apt install sleuthkit", "profiles": {"disk"}},
+    "sqlite3-python": {"kind": "python", "module": "sqlite3", "install": "reinstall the Python standard library sqlite3 module", "profiles": {"database"}},
 }
 
-PROFILES = ("all", "core", "triage", "stego", "hash", "archive", "pcap", "audio")
+PROFILES = ("all", "core", "triage", "stego", "hash", "archive", "pcap", "audio", "disk", "database")
 
 
 def check_tool(name: str, install_cmd: str) -> tuple[bool, str | None]:

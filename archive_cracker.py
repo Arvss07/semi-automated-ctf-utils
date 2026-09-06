@@ -7,10 +7,12 @@ import argparse
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 from typing import Sequence
+import zipfile
 
 
 TOOL_INSTALL = {
@@ -172,8 +174,34 @@ def _prepare_output_directory(output_dir: str, force: bool) -> Path:
     return path.resolve()
 
 
-def plain_extract(filepath: str, kind: str, output_dir: str = ".", force: bool = False) -> str:
+def _validate_zip_archive(archive: str, max_entries: int, max_bytes: int) -> None:
+    try:
+        with zipfile.ZipFile(archive) as handle:
+            entries = handle.infolist()
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise ArchiveError(f"invalid ZIP archive: {exc}") from exc
+    if len(entries) > max_entries:
+        raise ArchiveError(f"ZIP contains {len(entries)} entries; limit is {max_entries}")
+    total = 0
+    for entry in entries:
+        parts = Path(entry.filename.replace("\\", "/")).parts
+        if entry.filename.startswith(("/", "\\")) or ".." in parts:
+            raise ArchiveError(f"unsafe ZIP member path: {entry.filename!r}")
+        if stat.S_ISLNK(entry.external_attr >> 16):
+            raise ArchiveError(f"ZIP symlink members are not extracted: {entry.filename!r}")
+        total += entry.file_size
+        if total > max_bytes:
+            raise ArchiveError(f"ZIP expands beyond {max_bytes} bytes; raise --max-total-bytes explicitly")
+        if entry.file_size > 1_048_576 and entry.compress_size and entry.file_size / entry.compress_size > 1000:
+            raise ArchiveError(f"suspicious compression ratio for ZIP member {entry.filename!r}")
+
+
+def plain_extract(filepath: str, kind: str, output_dir: str = ".", force: bool = False, max_entries: int = 10_000, max_bytes: int = 1_073_741_824) -> str:
     archive = str(Path(filepath).resolve())
+    if max_entries < 1 or max_bytes < 1:
+        raise ArchiveError("extraction limits must be positive")
+    if kind == "zip":
+        _validate_zip_archive(archive, max_entries, max_bytes)
     destination = _prepare_output_directory(output_dir, force)
     if kind == "zip":
         name = "unzip"
@@ -235,6 +263,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--auto", action="store_true", help="Try cracking, then plain extraction if cracking fails")
     parser.add_argument("--output-dir", default=".", help="Extraction destination")
     parser.add_argument("--force", action="store_true", help="Permit existing output entries/overwrites")
+    parser.add_argument("--max-entries", type=int, default=10_000, help="Maximum ZIP members to extract")
+    parser.add_argument("--max-total-bytes", type=int, default=1_073_741_824, help="Maximum declared ZIP expansion")
     parser.add_argument("-o", "--output", default="console", help="Text report output path")
     return parser
 
@@ -253,7 +283,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         header = f"Archive: {archive}\nType: {file_type or kind}"
         if args.extract:
-            detail = plain_extract(str(archive), kind, args.output_dir, args.force)
+            detail = plain_extract(str(archive), kind, args.output_dir, args.force, args.max_entries, args.max_total_bytes)
             write_report(f"{header}\nStatus: extracted\n{detail}", args.output)
             return 0
 
@@ -263,7 +293,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         if args.auto:
-            extraction = plain_extract(str(archive), kind, args.output_dir, args.force)
+            extraction = plain_extract(str(archive), kind, args.output_dir, args.force, args.max_entries, args.max_total_bytes)
             write_report(
                 f"{header}\nCracking failed: {detail}\nStatus: plain extraction attempted\n{extraction}",
                 args.output,

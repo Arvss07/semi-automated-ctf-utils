@@ -140,15 +140,15 @@ def run_steghide_extract(filepath: str, output_path: str | None = None) -> tuple
 
 def choose_tools(requested: str, file_type: str | None, suffix: str) -> list[str]:
     if requested != "auto":
-        return ["steghide", "stegseek", "zsteg"] if requested == "all" else [requested]
+        return ["native", "steghide", "stegseek", "zsteg"] if requested == "all" else [requested]
     lowered = (file_type or "").lower()
     if "jpeg" in lowered or suffix in {".jpg", ".jpeg"}:
-        return ["steghide", "stegseek"]
+        return ["native", "steghide", "stegseek"]
     if "png" in lowered or suffix == ".png":
-        return ["zsteg"]
+        return ["native", "zsteg"]
     if "bitmap" in lowered or "bmp" in lowered or suffix == ".bmp":
-        return ["zsteg", "steghide", "stegseek"]
-    return ["steghide", "stegseek", "zsteg"]
+        return ["native", "zsteg", "steghide", "stegseek"]
+    return ["native", "steghide", "stegseek", "zsteg"]
 
 
 FLAG_PATTERNS = [
@@ -163,6 +163,34 @@ FLAG_PATTERNS = [
 ]
 
 WHITESPACE_ALPHABET = {0x20, 0x09, 0x0D, 0x0A}
+ZERO_WIDTH_BITS = {"\u200b": "0", "\u200c": "1"}
+APPENDED_SIGNATURES = {b"PK\x03\x04": "ZIP", b"Rar!\x1a\x07": "RAR", b"7z\xbc\xaf'\x1c": "7z", b"%PDF-": "PDF"}
+
+
+def native_scan(filepath: str) -> Attempt:
+    data = Path(filepath).read_bytes()
+    details: list[str] = []
+    text = data.decode("utf-8", errors="ignore")
+    bits = "".join(ZERO_WIDTH_BITS[char] for char in text if char in ZERO_WIDTH_BITS)
+    if len(bits) >= 8:
+        decoded = bytes(int(bits[index:index + 8], 2) for index in range(0, len(bits) - 7, 8))
+        details.append(f"zero-width: {len(bits)} bits -> {render_bytes_preview(decoded)}")
+    for signature, name in APPENDED_SIGNATURES.items():
+        start = data.find(signature, 1)
+        if start > 0:
+            details.append(f"embedded/appended {name} signature at byte offset {start} (use binwalk for explicit carving)")
+    return Attempt("native", bool(details), "; ".join(details) if details else "no zero-width or appended payload signature found")
+
+
+def render_bytes_preview(data: bytes, limit: int = 240) -> str:
+    sample = data[:limit]
+    try:
+        text = sample.decode("utf-8")
+        if all(char.isprintable() or char in "\r\n\t" for char in text):
+            return repr(text)
+    except UnicodeDecodeError:
+        pass
+    return "hex:" + sample.hex() + ("..." if len(data) > limit else "")
 
 
 def check_flag_format(data: bytes) -> list[str]:
@@ -366,7 +394,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--extract-to", help="Exact payload destination")
     parser.add_argument("--output-dir", default=".", help="Default payload directory")
     parser.add_argument("-o", "--output", default="console", help="Text report output path")
-    parser.add_argument("-t", "--tool", choices=["auto", "all", "steghide", "stegseek", "zsteg"], default="auto")
+    parser.add_argument("-t", "--tool", choices=["auto", "all", "native", "steghide", "stegseek", "zsteg"], default="auto")
     parser.add_argument("--force", action="store_true", help="Allow an existing payload path to be overwritten")
     parser.add_argument("-v", "--verbose", action="store_true", help="Show all whitespace-decode variants")
     return parser
@@ -396,7 +424,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         tools = choose_tools(args.tool, file_type, carrier.suffix.lower())
         attempts: list[Attempt] = []
         for tool in tools:
-            if tool == "steghide":
+            if tool == "native":
+                attempt = native_scan(str(carrier))
+            elif tool == "steghide":
                 attempt = extract_steghide(
                     str(carrier),
                     str(payload),
@@ -413,7 +443,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             else:
                 attempt = extract_zsteg(str(carrier))
             attempts.append(attempt)
-            if attempt.success:
+            if attempt.success and args.tool != "all":
                 break
 
         report = render_report(carrier, file_type, attempts, verbose=args.verbose)

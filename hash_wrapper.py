@@ -36,6 +36,15 @@ HASHCAT_MODES = {
     "zip": 13600,
     "rar5": 13000,
     "7z": 11600,
+    "sha3-256": 17400,
+    "sha3-512": 17600,
+    "blake2b-512": 600,
+    "blake2s-256": 31000,
+    "argon2": 34000,
+    "netntlmv1": 5500,
+    "netntlmv2": 5600,
+    "krb5tgs23": 13100,
+    "krb5asrep23": 18200,
 }
 
 JOHN_FORMATS = {
@@ -74,6 +83,15 @@ HASH_TYPES = tuple(
             "rar",
             "rar5",
             "7z",
+            "sha3-256",
+            "sha3-512",
+            "blake2b-512",
+            "blake2s-256",
+            "argon2",
+            "netntlmv1",
+            "netntlmv2",
+            "krb5tgs23",
+            "krb5asrep23",
         ]
     )
 )
@@ -103,6 +121,16 @@ def detect_hash_type(hash_string: str) -> str:
         return "rar"
     if "$7z$" in lowered:
         return "7z"
+    if lowered.startswith(("$argon2d$", "$argon2i$", "$argon2id$")):
+        return "argon2"
+    if lowered.startswith("$krb5tgs$23$"):
+        return "krb5tgs23"
+    if lowered.startswith("$krb5asrep$23$"):
+        return "krb5asrep23"
+    if re.fullmatch(r"[^:\s]+::[^:\s]*:[0-9A-Fa-f]{16}:[0-9A-Fa-f]{32}:[0-9A-Fa-f]+", value):
+        return "netntlmv2"
+    if re.fullmatch(r"[^:\s]+::[^:\s]*:[0-9A-Fa-f]{48}:[0-9A-Fa-f]{48}:[0-9A-Fa-f]{16}", value):
+        return "netntlmv1"
     if re.search(r"\$2[aby]\$\d{2}\$", value):
         return "bcrypt"
     if value.startswith("$1$"):
